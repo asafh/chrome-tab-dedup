@@ -1,72 +1,110 @@
 "use strict";
-
-function Counter(name, listener) {
-	this.count = 0;
-	this.name = name;
-    this.listener = listener;
-}
-Counter.prototype.setCount = function(count) {
-	this.count = count;
-    this.listener(this);
-};
-Counter.prototype.increment = function() {
-	this.setCount(this.count+1);
-};
-Counter.prototype.decrement = function() {
-	this.setCount(this.count-1);
-};
-function TabCounter(listener) {
-	Counter.call(this,"Tabs",listener);
-	var self = this;
-	chrome.tabs.query({}, function(tabs) {
-		self.setCount(tabs.length);	
-	});
-	chrome.tabs.onCreated.addListener(self.increment.bind(self));
-	chrome.tabs.onRemoved.addListener(self.decrement.bind(self));
-}
-TabCounter.prototype = new Counter();
-
-function WindowCounter(listener) {
-	Counter.call(this,"Windows",listener);
-	var self = this;
-	chrome.windows.getAll(function(windows) {
-		self.setCount(windows.length);	
-	});
-	chrome.windows.onCreated.addListener(self.increment.bind(self));
-	chrome.windows.onRemoved.addListener(self.decrement.bind(self));
-}
-WindowCounter.prototype = new Counter();
-
-
-function onUpdate() {
-    var text = "",
-        title = mode;
-
-    if(mode !== "Windows") {
-        text += counters.Tabs.count;
+class BidiListMap {
+    constructor() {
+        this.valueToKeys = new Map();
+        this.map = new Map();
     }
-    if(mode === "Both") {
-        text += "/";
-        title = "Tabs over Windows";
+    set(key, value) {
+        this.delete(key); //remove reverse mapping for the values at the key, if exists
+
+        this.map.set(key, value);
+        let keyList = this.valueToKeys.get(value);
+        if(!keyList) {
+            keyList = [];
+            this.valueToKeys.set(value, keyList);
+        }
+        keyList.push(key);
+
+        return keyList.length ? keyList.slice() : [];
     }
-    if(mode !== "Tabs") {
-        text += counters.Windows.count;
+    get(key) {
+        return this.map.get(key);
     }
-    chrome.browserAction.setBadgeText({text: text});
-    chrome.browserAction.setTitle({title: title});
+    getKeys(value) {
+        let keyList = this.valueToKeys.get(value);
+        return keyList ? keyList.slice() : [];
+    }
+    delete(key) {
+        if(!this.map.has(key)) {
+            return [];
+        }
+        const value = this.map.get(key);
+        this.map.delete(key);
+        const list = this.valueToKeys.get(value);
+        const index = list.indexOf(value);
+        list.splice(index, 1);
+        if(list.length === 0) {
+            this.valueToKeys.delete(value);
+        }
+        return list.length ? list.slice() : [];
+    }
 }
 
-const counters = {
-    "Tabs": new TabCounter(onUpdate),
-    "Windows": new WindowCounter(onUpdate)
+
+function showPageAction(id) {
+    console.log("Showing page action for tab "+id);
+    chrome.pageAction.show(id);
 }
-const modes = Object.keys(counters).concat(["Both"]);
-var mode = modes[0];
+function hidePageAction(id) {
+    console.log("Hiding page action for tab "+id);
+    chrome.pageAction.hide(id);
+}
+
+class Model {
+    constructor() {
+        this.mapper = new BidiListMap();
+        chrome.tabs.onCreated.addListener((tab) => {
+            if (tab.id !== undefined) {
+                this.setURL(tab.id, tab.url);
+            }
+        });
+        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+            if (changeInfo.url) {
+                this.setURL(tab.id, changeInfo.url);
+            }
+        });
+        chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+            this.setURL(tabId, undefined)
+        });
+        chrome.pageAction.onClicked.addListener(tab => {
+            const list = this.mapper.getKeys(tab.url);
+            const index = list.indexOf(tab.id);
+            const nextFocusIndex = (index + 1) % list.length;
+            const nextFocusId = list[nextFocusIndex];
+            chrome.tabs.update(nextFocusId, {active: true});
+            chrome.tabs.get(nextFocusId, (tab) => {
+                const windowId = tab.windowId;
+                chrome.windows.update(windowId, {focused: true});
+            })
+        });
+        chrome.tabs.query({}, (tabs) => {
+            tabs.forEach(tab => {
+                if(tab.url) {
+                    this.setURL(tab.id, tab.url);
+                }
+            })
+        })
+    }
+
+    setURL(tabId, url) {
+        const tabsInPreviousUrl = this.mapper.delete(tabId);
+        if(tabsInPreviousUrl.length === 1) {
+            hidePageAction(tabsInPreviousUrl[0]); //left alone
+        }
+        if(url === undefined) { //tab deleted.
+            return;
+        }
+        hidePageAction(tabId); //this tab isn't deleted
+
+        const nowWithUrl = this.mapper.set(tabId, url);
+        if(nowWithUrl.length > 1) {
+            showPageAction(tabId);
+            if(nowWithUrl.length === 2) {
+                showPageAction(nowWithUrl.find(id => id !== tabId)); //other id.
+            }
+        }
+    }
+}
 
 
-chrome.browserAction.onClicked.addListener(function() {
-	const nextIndex = (modes.indexOf(mode)+1)%modes.length;
-    mode = modes[nextIndex];
-	onUpdate();
-});
-onUpdate();
+const work = new Model();
