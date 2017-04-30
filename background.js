@@ -5,15 +5,18 @@ class BidiListMap {
         this.map = new Map();
     }
     set(key, value) {
+        // if(this.map.get(key) === value) {
+        //     return this.getKeys(value);
+        // }
         this.delete(key); //remove reverse mapping for the values at the key, if exists
 
-        this.map.set(key, value);
         let keyList = this.valueToKeys.get(value);
         if(!keyList) {
             keyList = [];
             this.valueToKeys.set(value, keyList);
         }
         keyList.push(key);
+        this.map.set(key, value);
 
         return keyList.length ? keyList.slice() : [];
     }
@@ -29,13 +32,15 @@ class BidiListMap {
             return [];
         }
         const value = this.map.get(key);
-        this.map.delete(key);
+
         const list = this.valueToKeys.get(value);
-        const index = list.indexOf(value);
+        const index = list.indexOf(key);
         list.splice(index, 1);
+        this.map.delete(key);
         if(list.length === 0) {
             this.valueToKeys.delete(value);
         }
+
         return list.length ? list.slice() : [];
     }
 }
