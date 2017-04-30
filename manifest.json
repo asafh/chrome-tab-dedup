@@ -1,6 +1,6 @@
 {
     "name": "Tab Deduplicator",
-    "version": "1.1",
+    "version": "1.2",
     "description": "Displays the current number of open tabs, open windows or both",
     "background": {
         "scripts": ["background.js"]
